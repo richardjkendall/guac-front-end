@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import styled from 'styled-components';
 
-import { Client, WebSocketTunnel, Mouse, Keyboard } from 'guacamole-common-js';
+import { Client, WebSocketTunnel, Mouse, Keyboard, BlobReader } from 'guacamole-common-js';
 
 const TitleBar = styled.div`
   width: 100vw;
@@ -12,6 +12,24 @@ const TitleBar = styled.div`
   flex-wrap: nowrap;
   color: white;
   align-items: center;
+
+  p, label {
+    margin: 0px;
+    padding: 0px;
+    font-family: Arial;
+    font-size: 10pt;
+    padding-left: 5px;
+    padding-right: 5px;
+  }
+
+  p:first-child {
+    padding-left: 10px;
+  }
+
+  button:last-child {
+    margin-left: auto;
+    margin-right: 10px;
+  }
 `
 
 const Display = styled.div`
@@ -27,12 +45,18 @@ const GuacClient = (props) => {
     new ResizeObserver(entries => {
       const { width, height } = entries[0].contentRect;
       console.log(`resized display local element ${width} x ${height}`, displayRect);
-      SetDisplayScale();
+      setLocalDisplayRect({
+        width: width,
+        height: height
+      });
     })
   )
 
   const [displayRect, setDisplayRect] = useState({x: 0, y: 0});
+  const [localDisplayRect, setLocalDisplayRect] = useState({width: 0, height: 0});
   const [scaleFactor, setScaleFactor] = useState(1);
+  const [conState, setConState] = useState("Idle");
+  const [clipboardEnabled, setClipboardEnabled] = useState(false);
 
   const RemoteResize = (x, y) => {
     console.log(`remote resize ${x} x ${y}`)
@@ -49,6 +73,11 @@ const GuacClient = (props) => {
     SetDisplayScale();
   }, [displayRect])
 
+  useEffect(() => {
+    console.log("local display rect", localDisplayRect);
+    SetDisplayScale();
+  })
+
   const SetDisplayScale = () => {
     const localDisplayRect = displayRef.current.getBoundingClientRect();
     console.log('scaling', localDisplayRect, displayRect);
@@ -62,7 +91,6 @@ const GuacClient = (props) => {
         console.log("need to scale");
         let factor = Math.min(localDisplayRect.width / displayRect.x, localDisplayRect.height / displayRect.y);
         setScaleFactor(factor);
-        //guac.current.getDisplay().scale(factor);
       }
     }
   }
@@ -73,6 +101,60 @@ const GuacClient = (props) => {
       guac.current.getDisplay().scale(scaleFactor);
     }
   }, [scaleFactor]);
+
+  const ConnStateUpdate = (state) => {
+    switch (state) {
+      case 0:
+        setConState("Idle");
+        break;
+      case 1:
+        setConState("Connecting...");
+        break;
+      case 2:
+        setConState("Waiting...");
+        break;
+      case 3:
+        setConState("Connected");
+        break;
+      case 4:
+      case 5:
+        setConState("Disconnected");
+        break;
+      default:
+        break;
+    }
+  }
+
+  const getBlob = (stream, mimetype) => {
+    return new Promise((resolve, reject) => {
+      const reader = new BlobReader(stream, mimetype);
+      reader.onend = () => {
+        resolve(reader.getBlob());
+      };
+    });
+  }
+
+  const HandleRemoteClipboard = async (stream, mimetype) => {
+    console.log("remote clipboard fired type", mimetype);
+    await getBlob(stream, mimetype)
+    .then(async blob => {
+      console.log("got data from clipboard", blob, clipboardEnabled);
+      let b = await blob.text();
+      console.log("value as text", b);
+      if(clipboardEnabled) {
+        navigator.clipboard.write([
+          new window.ClipboardItem({
+            [mimetype]: blob
+          })
+        ]);
+      } else {
+        console.log("clipboard disabled");
+      }
+    })
+    .catch(e => {
+      console.log("error getting blob from clipboard");
+    });
+  }
 
   useEffect(() => {
     console.log("starting....");
@@ -97,8 +179,13 @@ const GuacClient = (props) => {
 
     // register local resize
     displayObserver.current.observe(displayRef.current);
-    
 
+    // register state change handler
+    guac.current.onstatechange = ConnStateUpdate
+
+    // register remote clipboard handler
+    guac.current.onclipboard = HandleRemoteClipboard
+    
     // connect
     guac.current.connect("");
 
@@ -123,18 +210,30 @@ const GuacClient = (props) => {
     // register keyboard handler
     let keyboard = new Keyboard(document);
     keyboard.onkeydown = (keysym) => {
-      //console.log("keysym down", keysym);
       guac.current.sendKeyEvent(1, keysym);
     }
     keyboard.onkeyup = (keysym) => {
-      //console.log("keysym up", keysym);
       guac.current.sendKeyEvent(0, keysym);
     }
   }, [])
 
   return (
     <div>
-      <TitleBar />
+      <TitleBar>
+        <p>{conState}</p>
+        <p>{`${displayRect.x} x ${displayRect.y}`}</p>
+        <p>(x{Math.round(scaleFactor * 100) / 100})</p>
+        <div>
+          <input
+           id="ce" 
+           type="checkbox" 
+           checked={clipboardEnabled}
+           onChange={(e) => setClipboardEnabled(e.target.value)}
+          />
+          <label htmlFor="ce">Clipboard enabled</label>
+        </div>
+        <button>Reconnect</button>
+      </TitleBar>
       <Display
         ref={displayRef} 
       />
