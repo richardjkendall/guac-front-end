@@ -88,10 +88,10 @@ const GuacClient = (props) => {
     ClipboardPermissions.forEach(p => {
       navigator.permissions.query(p)
       .then(r => {
-          console.log("permissions", p, r.state);
-          if(p.name === "clipboard-read" && r.state === "prompt") {
-              navigator.clipboard.readText();
-          }
+        console.log("permissions", p, r.state);
+        if(p.name === "clipboard-read" && r.state === "prompt") {
+          navigator.clipboard.readText();
+        }
       });
     });
   }
@@ -193,16 +193,55 @@ const GuacClient = (props) => {
     });
   }
 
+  const blobToBase64 = (blob) => {
+    return new Promise((res, _) => {
+      const reader = new FileReader();
+      reader.onloadend = () => res(reader.result);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  const sendBlobBasedOnMimeType = async (item, mimeType) => {
+    const blob = await item.getType(mimeType);
+    const blobAsDataUrl = await blobToBase64(blob);
+    const blobAsB64 = blobAsDataUrl.split(",")[1];
+    console.log("size of b64 blob", blobAsB64.length);
+    const stream = guac.current.createClipboardStream(mimeType, "remote");
+    stream.onack = () => {
+      stream.sendEnd();
+    }
+    stream.sendBlob(blobAsB64);
+  }
+
+  const MimeOrder = ['text/plain', 'text/html'];
+
   const SendToRemoteClipboard = async () => {
     // need to get the contents of the local clipboard
     const items = await navigator.clipboard.read();
     if(items.length > 0) {
       console.log("local clipboard has something");
       const item = items[0];
-      for(let mimetype of item.types) {
-        console.log("type", mimetype);
+      const itemTypes = item.types;
+      if(itemTypes.length >  1) {
+        console.log("multiple types available", itemTypes);
+        const typeToSend = itemTypes.map(i => MimeOrder.indexOf(i)).reduce((p, c) => Math.max(p, c), -1);
+        console.log("got type to send of", typeToSend);
+        if(typeToSend != -1) {
+          console.log("type to send is", MimeOrder[typeToSend]);
+          sendBlobBasedOnMimeType(item, MimeOrder[typeToSend]);
+        } else {
+          console.log("no compatible types on clipboard");
+        }
+      } else {
+        // only one mimetype available
+        console.log("Got a single mimetype from clipboard of", itemTypes[0]);
+        sendBlobBasedOnMimeType(item, itemTypes[0]);
       }
     }
+  }
+
+  const Reconnect = () => {
+    guac.current.connect();
   }
 
   useEffect(() => {
@@ -236,7 +275,7 @@ const GuacClient = (props) => {
     guac.current.onclipboard = HandleRemoteClipboard
     
     // connect
-    guac.current.connect("");
+    guac.current.connect();
 
     // register mouse handler
     let mouse  = new Mouse(guac.current.getDisplay().getElement());
@@ -282,7 +321,7 @@ const GuacClient = (props) => {
           <label htmlFor="ce">Clipboard enabled</label>
         </div>
         <button disabled={!clipboardEnabled} onClick={SendToRemoteClipboard}>Copy to remote clipboard</button>
-        <button disabled={conState === "Connected"}>Reconnect</button>
+        <button disabled={conState === "Connected"} onClick={Reconnect}>Reconnect</button>
       </TitleBar>
       <Display
         ref={displayRef} 
